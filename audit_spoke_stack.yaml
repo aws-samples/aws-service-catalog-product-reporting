@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Provisions resources for Service Catalog auditing automation
+
+Parameters:
+  HubAccountId:
+    Type: String
+    Description: Hub account ID
+  PrimaryRegion:
+    Description: Primary region where Hub central audit resources were deployed such as the DynamoDB table, EventBridge event bus, and the Athena table
+    Type: String
+  ResourceNamePrefix:
+    Description: Prefix for naming all of the resources created by this CloudFormation template. You may leave the default value.
+    Type: String
+    Default: "service-catalog"
+
+Resources:
+#########################################################
+# EventBridge
+#########################################################
+  AuditEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: ServiceCatalogAuditEventRule
+      Description: Service Catalog audit event rule to monitor product lifecycle
+      EventPattern:
+        {
+          "source": [
+            "aws.servicecatalog"
+          ],
+          "detail-type": [
+            "AWS API Call via CloudTrail"
+          ],
+          "detail": {
+            "eventSource": [
+                "servicecatalog.amazonaws.com"
+            ],
+            "eventName": [
+                "ProvisionProduct",
+                "TerminateProvisionedProduct",
+                "UpdateProvisionedProduct"
+            ]
+          }
+        }
+      State: "ENABLED"
+      Targets:
+        - Id: HubAccountEventBusArn
+          Arn: !Sub arn:aws:events:${PrimaryRegion}:${HubAccountId}:event-bus/${ResourceNamePrefix}-bus
+          RoleArn: !GetAtt AuditEventsServiceRole.Arn
+          DeadLetterConfig:
+            Arn: !Sub arn:aws:sqs:${AWS::Region}:${HubAccountId}:${ResourceNamePrefix}-dlq
+
+  AuditEventsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourceNamePrefix}-audit-spoke-${AWS::Region}-EventsServiceRole
+      Description: !Sub ${ResourceNamePrefix}-audit-spoke-${AWS::Region} Events service role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+
+  AuditEventsServiceRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${ResourceNamePrefix}-audit-spoke-${AWS::Region}-EventsServiceRole-Policy
+      Description: !Sub ${ResourceNamePrefix}-audit-spoke-${AWS::Region} Events service role policy
+      Path: /
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Events
+          Effect: Allow
+          Action:
+            - events:PutEvents
+          Resource:
+            - !Sub arn:aws:events:${PrimaryRegion}:${HubAccountId}:event-bus/${ResourceNamePrefix}-bus
+          Condition:
+              StringEquals:
+                "events:detail-type": "AWS API Call via CloudTrail"
+                "events:source": "aws.servicecatalog"
+        - Sid: Sqs
+          Effect: Allow
+          Action:
+            - sqs:SendMessage
+          Resource:
+            - !Sub arn:aws:sqs:${AWS::Region}:${HubAccountId}:${ResourceNamePrefix}-dlq
+      Roles:
+      - !Ref AuditEventsServiceRole

@@ -1,0 +1,411 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Provisions resources for Service Catalog auditing automation
+
+Parameters:
+  OrganizationId:
+    Description: |
+      The AWS Organization ID is unique to your organization. Retrieve this value from Services,
+      Management & Governance, and AWS Organizations.
+    Type: String
+  PrimaryRegion:
+    Description: Primary region to deploy central audit resources such as the DynamoDB table, the EventBridge event bus, and the Athena table
+    Type: String
+  ResourceNamePrefix:
+    Description: Prefix for naming all of the resources created by this CloudFormation template. You may leave the default value.
+    Type: String
+    Default: "service-catalog"
+  S3BucketName:
+    Description: Provide the name of the S3 bucket that has the lambda deployment packages.
+    AllowedPattern: ^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$
+    Type: String
+  S3KeyPrefix:
+    Description: Provide the directory of the S3 bucket that has the lambda deployment packages. You may leave the default value.
+    AllowedPattern: ^[0-9a-zA-Z-/_]*$
+    Default: lambda/service_catalog_audit/
+    Type: String
+
+Conditions:
+  # Create central resources only in PrimaryRegion
+  DeployPrimaryRegion: !Equals [ !Ref 'AWS::Region', !Ref PrimaryRegion ]
+
+Resources:
+#########################################################
+# Copy Lambda Function Code
+#########################################################
+  CopyZipsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub copy-files-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CopyZipsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CopyZipsBucket
+      PolicyDocument:
+        Statement:
+          - Action: 's3:*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+            Effect: Deny
+            Principal: '*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${CopyZipsBucket}/*'
+              - !Sub 'arn:aws:s3:::${CopyZipsBucket}'
+            Sid: AllowSSLRequestsOnly
+
+  CopyZips:
+    Type: Custom::CopyZips
+    Properties:
+      ServiceToken: !GetAtt CopyZipsFunction.Arn
+      DestBucket: !Ref CopyZipsBucket
+      SourceBucket: !Ref S3BucketName
+      Prefix: !Ref S3KeyPrefix
+      Objects:
+        - service_catalog_audit.zip
+
+  CopyZipsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-copier
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:DeleteObjectTagging
+                  - s3:DeleteObjectVersion
+                  - s3:DeleteObjectVersionTagging
+                  - s3:Get*
+                  - s3:List*
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CopyZipsBucket}/*'
+                  - !Sub 'arn:aws:s3:::${CopyZipsBucket}'
+
+  CopyZipsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Copies objects from a source S3 bucket to a destination
+      Handler: index.handler
+      Runtime: python3.7
+      Role: !GetAtt 'CopyZipsRole.Arn'
+      Timeout: 240
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import threading
+          import boto3
+          import cfnresponse
+          def copy_objects(source_bucket, dest_bucket, prefix, objects):
+              s3 = boto3.client('s3')
+              for o in objects:
+                  key = prefix + o
+                  copy_source = {
+                      'Bucket': source_bucket,
+                      'Key': key
+                  }
+                  print(('copy_source: %s' % copy_source))
+                  print(('dest_bucket = %s'%dest_bucket))
+                  print(('key = %s' %key))
+                  s3.copy_object(CopySource=copy_source, Bucket=dest_bucket,
+                        Key=key)
+          def delete_objects(bucket, prefix, objects):
+              s3 = boto3.client('s3')
+              objects = {'Objects': [{'Key': prefix + o} for o in objects]}
+              s3.delete_objects(Bucket=bucket, Delete=objects)
+          def timeout(event, context):
+              logging.error('Execution is about to time out, sending failure response to CloudFormation')
+              cfnresponse.send(event, context, cfnresponse.FAILED, {}, None)
+          def handler(event, context):
+              # make sure we send a failure to CloudFormation if the function
+              # is going to timeout
+              timer = threading.Timer((context.get_remaining_time_in_millis()
+                        / 1000.00) - 0.5, timeout, args=[event, context])
+              timer.start()
+              print(('Received event: %s' % json.dumps(event)))
+              status = cfnresponse.SUCCESS
+              try:
+                  source_bucket = event['ResourceProperties']['SourceBucket']
+                  dest_bucket = event['ResourceProperties']['DestBucket']
+                  prefix = event['ResourceProperties']['Prefix']
+                  objects = event['ResourceProperties']['Objects']
+                  if event['RequestType'] == 'Delete':
+                      delete_objects(dest_bucket, prefix, objects)
+                  else:
+                      copy_objects(source_bucket, dest_bucket, prefix, objects)
+              except Exception as e:
+                  logging.error('Exception: %s' % e, exc_info=True)
+                  status = cfnresponse.FAILED
+              finally:
+                  timer.cancel()
+                  cfnresponse.send(event, context, status, {}, None)
+
+#########################################################
+# S3
+#########################################################
+  AuditAthenaBucket:
+    Type: AWS::S3::Bucket
+    Condition: DeployPrimaryRegion
+    Properties:
+      BucketName: !Sub audit-athena-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+#########################################################
+# DynamoDB
+#########################################################
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    Condition: DeployPrimaryRegion
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "provisionedProductId"
+          AttributeType: "S"
+        - AttributeName: "accountIdRegion"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "provisionedProductId"
+          KeyType: "HASH"
+        - AttributeName: "accountIdRegion"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      TableName: !Sub "${ResourceNamePrefix}-db-table"
+
+#########################################################
+# SQS
+#########################################################
+  AuditDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ResourceNamePrefix}-dlq"
+
+  AuditDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AuditDLQ
+      PolicyDocument:
+        Statement:
+          - Action:
+              - sqs:SendMessage
+              - sqs:ReceiveMessage
+            Effect: "Allow"
+            Resource: !GetAtt AuditDLQ.Arn
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Condition:
+              StringEquals:
+                aws:PrincipalOrgId: !Ref OrganizationId
+
+  AuditLambdaSQSEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn:
+      - AuditLambdaServiceRolePolicy
+    Properties:
+      Enabled: true
+      EventSourceArn: !GetAtt AuditDLQ.Arn
+      FunctionName: !GetAtt AuditLambdaFunction.Arn
+
+#########################################################
+# Lambda
+#########################################################
+  AuditLambdaServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourceNamePrefix}-${AWS::Region}-LambdaServiceRole
+      Description: !Sub ${ResourceNamePrefix}-${AWS::Region} Lambda service role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSLambdaExecute
+      Path: "/"
+
+  AuditLambdaServiceRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${ResourceNamePrefix}-${AWS::Region}-LambdaServiceRole-Policy
+      Description: !Sub ${ResourceNamePrefix}-${AWS::Region} Lambda service role policy
+      Path: /
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccessDynamoDB
+            Effect: Allow
+            Action:
+              - dynamodb:DeleteItem
+              - dynamodb:GetItem
+              - dynamodb:GetRecords
+              - dynamodb:GetShardIterator
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+            Resource:
+              - !Sub arn:aws:dynamodb:${PrimaryRegion}:${AWS::AccountId}:table/${ResourceNamePrefix}-db-table
+          - Sid: AccessSQS
+            Effect: Allow
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:ChangeMessageVisibility
+              - sqs:GetQueueUrl
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+            Resource:
+              - !GetAtt AuditDLQ.Arn
+      Roles:
+      - !Ref AuditLambdaServiceRole
+
+  AuditLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CopyZips
+    Properties:
+      FunctionName: !Sub ${ResourceNamePrefix}-lambda
+      Handler: service_catalog_audit.lambda_handler
+      Role: !GetAtt AuditLambdaServiceRole.Arn
+      Code:
+        S3Bucket: !Ref CopyZipsBucket
+        S3Key: !Sub ${S3KeyPrefix}service_catalog_audit.zip
+      Runtime: python3.8
+      Timeout: 30
+      TracingConfig:
+        Mode: Active
+      Environment:
+        Variables:
+          AUDIT_TABLE: !Sub ${ResourceNamePrefix}-db-table
+          SQS_DLQ: !Sub https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourceNamePrefix}-dlq
+          PRIMARY_REGION: !Ref PrimaryRegion
+
+#########################################################
+# EventBridge
+#########################################################
+  AuditEventBus:
+    Type: AWS::Events::EventBus
+    Condition: DeployPrimaryRegion
+    Properties:
+      Name: !Sub "${ResourceNamePrefix}-bus"
+
+  AuditEventBusLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: DeployPrimaryRegion
+    Properties:
+      LogGroupName: !Sub '/aws/events/${ResourceNamePrefix}-bus-events'
+      RetentionInDays: 7
+
+  AuditEventBusArchive:
+    Type: AWS::Events::Archive
+    Condition: DeployPrimaryRegion
+    Properties:
+      ArchiveName: !Sub "${ResourceNamePrefix}-bus-archive"
+      Description: Archive for Service Catalog product audit events
+      RetentionDays: 90
+      SourceArn: !GetAtt AuditEventBus.Arn
+
+  AuditEventBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    Condition: DeployPrimaryRegion
+    Properties:
+      EventBusName: !Ref AuditEventBus
+      StatementId: "AuditEventBusStatement"
+      Principal: "*"
+      Action: "events:PutEvents"
+      Condition:
+        Key: "aws:PrincipalOrgID"
+        Type: "StringEquals"
+        Value: !Ref OrganizationId
+
+  AuditEventRule:
+    Type: AWS::Events::Rule
+    Condition: DeployPrimaryRegion
+    Properties:
+      Name: ServiceCatalogAuditHubEventRule
+      Description: Service Catalog audit hub event rule to monitor product lifecycle
+      EventBusName: !Ref AuditEventBus
+      EventPattern:
+        {
+          "source": [
+              "aws.servicecatalog"
+          ],
+          "detail-type": [
+              "AWS API Call via CloudTrail"
+          ],
+          "detail": {
+              "eventSource": [
+                  "servicecatalog.amazonaws.com"
+              ],
+              "eventName": [
+                  "ProvisionProduct",
+                  "TerminateProvisionedProduct",
+                  "UpdateProvisionedProduct"
+              ]
+          }
+        }
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt AuditLambdaFunction.Arn
+          Id: "AuditLambdaFunction"
+        - Arn: !GetAtt AuditEventBusLogGroup.Arn
+          Id: "AuditEventBusLogGroup"
+
+  PermissionForAuditEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Condition: DeployPrimaryRegion
+    Properties:
+      FunctionName: !Ref AuditLambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt AuditEventRule.Arn
+
+Outputs:
+  HubAccountEventBusArn:
+    Condition: DeployPrimaryRegion
+    Description: Hub account EventBridge ARN
+    Value: !GetAtt AuditEventBus.Arn
+
+  HubAccountSqsDlqArn:
+    Description: Hub account SQS dead-letter queue ARN
+    Value: !GetAtt AuditDLQ.Arn
+
+  AuditAthenaBucketName:
+    Condition: DeployPrimaryRegion
+    Description: Hub account Athena DynamoDB spill bucket name
+    Value: !Ref AuditAthenaBucket

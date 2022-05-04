@@ -1,0 +1,207 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creating the required hub infra
+
+Parameters:
+  OrganizationId:
+    Description: |
+      The AWS Organization ID is unique to your organization. Retrieve this value from Services,
+      Management & Governance, and AWS Organizations.
+    Type: String
+  ResourceNamePrefix:
+    Description: Prefix for naming all of the resources created by this CloudFormation template. You may leave the default value.
+    Type: String
+    Default: "service-catalog"
+
+Resources:
+#########################################################
+# S3 Source Template Bucket
+#########################################################
+  TemplateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub source-files-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  TemplateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TemplateBucket
+      PolicyDocument:
+        Statement:
+          - Action: 's3:*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+            Effect: Deny
+            Principal: '*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${TemplateBucket}/*'
+              - !Sub 'arn:aws:s3:::${TemplateBucket}'
+            Sid: AllowSSLRequestsOnly
+          - Action:
+              - s3:GetObject
+              - s3:GetObjectTagging
+              - s3:ListBucket
+            Condition:
+              StringEquals:
+                'aws:PrincipalOrgID': !Ref OrganizationId
+            Effect: Allow
+            Principal: '*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${TemplateBucket}/*'
+              - !Sub 'arn:aws:s3:::${TemplateBucket}'
+            Sid: AllowOrg
+
+#########################################################
+# IAM
+#########################################################
+  SCStackSetParentRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: sc-stackset-parent-role
+      Path: /
+      Policies:
+        - PolicyName: sc-stackset-parent-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 'sts:AssumeRole'
+                Resource: 'arn:aws:iam::*:role/sc-stackset-child-role'
+
+  SCStackSetChildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt SCStackSetParentRole.Arn
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: sc-stackset-child-role
+      Path: /
+      Policies:
+        - PolicyName: sc-stackset-child-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - servicecatalog:*
+                  - s3:*
+                  - sns:*
+                  - iam:PassRole
+                Resource: '*'
+        - PolicyName: sc-stackset-audit-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:ListArchives
+                  - events:ListRules
+                  - events:PutPermission
+                  - events:RemovePermission
+                  - lambda:CreateEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:ListTagsOfResource
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:UpdateTable
+                  - events:CreateArchive
+                  - events:CreateEventBus
+                  - events:DeleteArchive
+                  - events:DeleteEventBus
+                  - events:DeleteRule
+                  - events:DescribeArchive
+                  - events:DescribeEventBus
+                  - events:DescribeRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:TagResource
+                  - events:UntagResource
+                  - events:UpdateArchive
+                  - iam:AttachRolePolicy
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:CreateRole
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetPolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListPolicyVersions
+                  - iam:PutRolePolicy
+                  - lambda:AddPermission
+                  - lambda:CreateFunction
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:DeleteFunction
+                  - lambda:DeleteLayerVersion
+                  - lambda:InvokeFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetLayerVersion
+                  - lambda:PublishLayerVersion
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateEventSourceMapping
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DeleteRetentionPolicy
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                  - s3:GetObject
+                  - s3:GetObjectTagging
+                  - s3:ListBucket
+                  - sqs:AddPermission
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:RemovePermission
+                  - sqs:SetQueueAttributes
+                  - sqs:TagQueue
+                  - sqs:UntagQueue
+                Resource:
+                  - !Sub arn:aws:dynamodb:*:${AWS::AccountId}:table/${ResourceNamePrefix}*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:archive/*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:event-bus/${ResourceNamePrefix}*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:event-source-mapping:*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:layer:${ResourceNamePrefix}*
+                  - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:${ResourceNamePrefix}*
+                  - arn:aws:s3:::*
