@@ -77,8 +77,9 @@ The values input into the audit DynamoDB table are derived from the CloudTrail e
 2. Deploy the `organization_infra_stack.yaml`  CloudFormation Stack in the hub account's primary region. The template will ask for the following parameters:
     1. OrganizationId: The AWS Organization ID is unique to your organization. Retrieve this value from Services, Management & Governance, and AWS Organizations, e.g., "o-f4sp1mk5g5".
     2. ResourceNamePrefix: Prefix for naming all of the resources created by this CloudFormation template, e.g., "service-catalog". You may leave the default value.
-3. Upload the `lambda` directory to the newly created "source-files-<account_id>-<region>" [Amazon Simple Storage Service (Amazon S3)](https://aws.amazon.com/s3/) bucket.  Refer to the documentation on [uploading objects to the S3 bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html). After the upload to the bucket is complete, the prefix structure will be "lambda/service_catalog_audit/".
-4. Deploy the `audit_hub_stack.yaml` as a CloudFormation StackSet. Designate one account in your AWS Organization as a hub account with a primary region:
+3. Create a zip package of the `service_catalog_audit.py` file found inside the `lambda/service_catalog_audit/` directory, and name the zip package `service_catalog_audit.zip`. Refer to [Deploy Python Lambda functions with .zip file archives](https://docs.aws.amazon.com/lambda/latest/dg/python-package.html). Then, place the zip package in the `lambda/service_catalog_audit/` directory.
+4. Upload the `lambda` directory to the newly created "source-files-<account_id>-<region>" [Amazon Simple Storage Service (Amazon S3)](https://aws.amazon.com/s3/) bucket.  Refer to the documentation on [uploading objects to the S3 bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html). After the upload to the bucket is complete, the prefix structure will be "lambda/service_catalog_audit/".
+5. Deploy the `audit_hub_stack.yaml` as a CloudFormation StackSet. Designate one account in your AWS Organization as a hub account with a primary region:
     1. Choose Self-service permissions
     2. Choose sc-stackset-parent-role as the admin role. This role was created by the `organization_infra_stack.yaml`  CloudFormation Stack.
     3. Type in sc-stackset-child-role as the execution role. This role was created by the `organization_infra_stack.yaml`  CloudFormation Stack.
@@ -95,7 +96,7 @@ The values input into the audit DynamoDB table are derived from the CloudTrail e
         1. Specify the regions where you’d like to deploy this stack:
             1. Select the region that you’ve input for **PrimaryRegion** parameter specified above. This is where the DynamoDB table, the EventBridge event bus, and the Athena table will reside.
             2. Select any other regions where users may provision AWS Service Catalog products.  These regions will just have the SQS DLQ and the event processor Lambda function.
-5. Deploy the `audit_spoke_stack.yaml` as a CloudFormation StackSet to all of the spoke accounts where AWS Service Catalog is utilized to provision products.
+6. Deploy the `audit_spoke_stack.yaml` as a CloudFormation StackSet to all of the spoke accounts where AWS Service Catalog is utilized to provision products.
     1. Choose Service-managed permissions.
         1. If you’re launching this StackSet from the hub account, and it’s not the Organizations management account, then [delegate the hub account as an administrator](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html).
     2. The template will ask for the following parameters:
@@ -104,7 +105,7 @@ The values input into the audit DynamoDB table are derived from the CloudTrail e
         3. ResourceNamePrefix: Prefix for naming all of the resources created by this CloudFormation template, e.g., "service-catalog". You may leave the default value.
     3. Deployment targets can either be your entire AWS Organization or specific Organizational Units (OUs) that where AWS Service Catalog products will be provisioned.
     4. Select all of the regions matching the hub account deployment from the previous step.
-6. To test create a product in a spoke account and verify that an item was inserted into the DynamoDB table found in the hub account's primary region.
+7. To test create a product in a spoke account and verify that an item was inserted into the DynamoDB table found in the hub account's primary region.
 
 ### Athena DynamoDB Connector
 
