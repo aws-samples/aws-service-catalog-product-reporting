@@ -1,8 +1,8 @@
-# Visualize Service Catalog Product Usage in an AWS Organization with Amazon QuickSight
+# Visualize AWS Service Catalog Product Usage in an AWS Organization with Amazon QuickSight
 
-AWS Service Catalog is a widely used service that simplifies the management of tools, services, and resources in AWS accounts for organizations. This service empowers end users to provision products vetted by their organization in their environments with confidence in security and compliance. Portfolios are shared with AWS accounts in an AWS Organization, from which end users simply need to launch products.
+AWS Service Catalog is a widely used service that simplifies the management of tools, services, and resources in AWS accounts for organizations. This service empowers end users to provision products vetted by their organization in their environments with confidence in security and compliance. Portfolios are shared with AWS accounts in an AWS Organization, from which deploy only the approved AWS services (products) they need.
 
-This post provides a logging and reporting solution for customers with a hub and spoke account setup where the hub account is used to create products and portfolios which are then shared and provisioned on spoke accounts. An enterprise using this type of setup would have many hundreds of spoke accounts across different regions in which different teams would be provisioning products available to them. Since this activity is tracked in the corresponding spoke accounts, a centralized monitoring and logging solution, through which the Business can receive a consolidated overview of such activities in the hub account, becomes imperative for effective governance.
+This post provides a logging and reporting solution for customers with a hub and spoke account setup where the hub account is used to create products and portfolios which are then shared and provisioned on spoke accounts. An enterprise using this type of setup would have many hundreds of spoke accounts across different Regions in which different teams would be provisioning products available to them. Since this activity is tracked in the corresponding spoke accounts, a centralized monitoring and logging solution, through which the Business can receive a consolidated overview of such activities in the hub account, becomes imperative for effective governance.
 
 The following solution implements this, and then shares the KPIs required by the business to understand and track the products provisioned in all of the spoke accounts by using:
 
@@ -31,8 +31,8 @@ The AWS Service Catalog reporting implementation tracks when AWS Service Catalog
 ![service_catalog_audit_quicksight](./images/service_catalog_audit_quicksight.png)
 
 1. User provisions, updates, or terminates a product in a spoke account.
-2. Event rule in spoke account captures the matching event from [Amazon CloudTrail](https://aws.amazon.com/cloudtrail/) events, and forwards to hub account's custom event bus
-    1. If event fails to send to hub account's custom event bus, then send to hub account's DLQ SQS.
+2. Event rule in spoke account captures the matching event from [AWS CloudTrail](https://aws.amazon.com/cloudtrail/) events, and forwards to hub account's custom event bus
+    1. If event fails to send to hub account's custom event bus, then send to hub account's DLQ Amazon SQS.
 3. Both the custom event bus and the DLQ SQS can trigger the event processor Lambda.
 4. Event processor Lambda checks the event payload to determine if it's a ProvisionProduct, UpdateProvisionedProduct, or TerminateProvisionedProduct event.
     1. If the event is ProvisionProduct, then create a new row item in the audit DynamoDB table.
@@ -41,9 +41,9 @@ The AWS Service Catalog reporting implementation tracks when AWS Service Catalog
 
 ### Processing events
 
-Events are processed by the event processor Lambdas provisioned in all of the regions to which the hub StackSet is deployed. Furthermore, it writes to the central DynamoDB table located in the hub account's primary region. An SQS dead-letter queue is present in all of the regions in the hub account, and it accepts events that were unsuccessfully delivered to the hub account's custom event bus from the spoke accounts from the same region.
+Events are processed by the event processor Lambda functions provisioned in all of the Regions to which the hub StackSet is deployed. Furthermore, it writes to the central DynamoDB table located in the hub account's primary Region. An Amazon SQS dead-letter queue is present in all of the Regions in the hub account, and it accepts events that were unsuccessfully delivered to the hub account's custom event bus from the spoke accounts from the same Region.
 
-Moreover, events are archived in the hub account's primary region for future historical replay. Initiating a replay will result in the event processing Lambda to process all of the events from the last 90 days. The Lambda will not make duplicate entries if an AWS Service Catalog product has already been inserted into the table.
+Moreover, events are archived in the hub account's primary Region for future historical replay. Initiating a replay will result in the event processing Lambda to process all of the events from the last 90 days. The Lambda will not make duplicate entries if an AWS Service Catalog product has already been inserted into the table.
 
 ### Amazon DynamoDB
 
@@ -74,38 +74,38 @@ The values input into the audit DynamoDB table are derived from the CloudTrail e
 ## Deploy the solution
 
 1. Designate an account that will act as the hub which aggregates all of the data and hosts the DynamoDB table.  [Refer to the Simplify sharing your AWS Service Catalog portfolios in an AWS Organizations setup](https://aws.amazon.com/blogs/mt/simplify-sharing-your-aws-service-catalog-portfolios-in-an-aws-organizations-setup/) post if you do not currently have AWS Service Catalog in your organization.
-2. Deploy the `organization_infra_stack.yaml`  CloudFormation Stack in the hub account's primary region. The template will ask for the following parameters:
+2. Deploy the `organization_infra_stack.yaml`  CloudFormation Stack in the hub account's primary Region. The template will ask for the following parameters:
     1. OrganizationId: The AWS Organization ID is unique to your organization. Retrieve this value from Services, Management & Governance, and AWS Organizations, e.g., "o-f4sp1mk5g5".
     2. ResourceNamePrefix: Prefix for naming all of the resources created by this CloudFormation template, e.g., "service-catalog". You may leave the default value.
 3. Create a zip package of the `service_catalog_audit.py` file found inside the `lambda/service_catalog_audit/` directory, and name the zip package `service_catalog_audit.zip`. Refer to [Deploy Python Lambda functions with .zip file archives](https://docs.aws.amazon.com/lambda/latest/dg/python-package.html). Then, place the zip package in the `lambda/service_catalog_audit/` directory.
 4. Upload the `lambda` directory to the newly created "source-files-<account_id>-<region>" [Amazon Simple Storage Service (Amazon S3)](https://aws.amazon.com/s3/) bucket.  Refer to the documentation on [uploading objects to the S3 bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html). After the upload to the bucket is complete, the prefix structure will be "lambda/service_catalog_audit/".
-5. Deploy the `audit_hub_stack.yaml` as a CloudFormation StackSet. Designate one account in your AWS Organization as a hub account with a primary region:
+5. Deploy the `audit_hub_stack.yaml` as a CloudFormation StackSet. Designate one account in your AWS Organization as a hub account with a primary Region:
     1. Choose Self-service permissions
     2. Choose sc-stackset-parent-role as the admin role. This role was created by the `organization_infra_stack.yaml`  CloudFormation Stack.
     3. Type in sc-stackset-child-role as the execution role. This role was created by the `organization_infra_stack.yaml`  CloudFormation Stack.
     4. Choose `audit_hub_stack.yaml` as the template source.
     5. The template will ask for the following parameters:
-        1. OrganizationId: The AWS Organization ID is unique to your organization. Retrieve this value from Services, Management & Governance, and AWS Organizations, e.g., "o-xxxxxxxxxx".
+        1. OrganizationId: The AWS Organization ID is unique to your organization. Retrieve this value from Services, Management and Governance, and AWS Organizations, e.g., "o-xxxxxxxxxx".
         2. ResourceNamePrefix: Prefix for naming all of the resources created by this CloudFormation template, e.g., "service-catalog". You may leave the default value.
-        3. PrimaryRegion: Primary region to deploy central audit resources, such as the DynamoDB table, the [Amazon EventBridge](https://aws.amazon.com/eventbridge/) event bus, and the Athena table e.g., “us-east-1”.
+        3. PrimaryRegion: Primary Region to deploy central audit resources, such as the DynamoDB table, the [Amazon EventBridge](https://aws.amazon.com/eventbridge/) event bus, and the Athena table e.g., “us-east-1”.
         4. S3BucketName: Provide the name of the S3 bucket that has the Lambda deployment packages.  This is the S3 bucket created by the organization_infra_stack.yaml CloudFormation stack, e.g., "source-files-<account_id>-<region>".
         5. S3KeyPrefix: Provide the directory of the S3 bucket that has the lambda deployment packages, e.g., "lambda/service_catalog_audit/". You may leave the default value.
     6. Set deployment options:
         1. Select deploy stacks in accounts.
             1. Enter the AWS account ID of the desired hub account.
-        1. Specify the regions where you’d like to deploy this stack:
-            1. Select the region that you’ve input for **PrimaryRegion** parameter specified above. This is where the DynamoDB table, the EventBridge event bus, and the Athena table will reside.
-            2. Select any other regions where users may provision AWS Service Catalog products.  These regions will just have the SQS DLQ and the event processor Lambda function.
+        1. Specify the Regions where you’d like to deploy this stack:
+            1. Select the Region that you’ve input for **PrimaryRegion** parameter specified above. This is where the DynamoDB table, the EventBridge event bus, and the Athena table will reside.
+            2. Select any other Regions where users may provision AWS Service Catalog products.  These Regions will just have the Amazon SQS DLQ and the event processor Lambda function.
 6. Deploy the `audit_spoke_stack.yaml` as a CloudFormation StackSet to all of the spoke accounts where AWS Service Catalog is utilized to provision products.
     1. Choose Service-managed permissions.
         1. If you’re launching this StackSet from the hub account, and it’s not the Organizations management account, then [delegate the hub account as an administrator](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html).
     2. The template will ask for the following parameters:
         1. HubAccountId: The AWS account ID of the hub account created in the previous step.
-        2. PrimaryRegion: Primary region where Hub central audit resources were deployed such as the DynamoDB table, EventBridge event bus, and the Athena table, e.g., "us-east-1".
+        2. PrimaryRegion: Primary Region where Hub central audit resources were deployed such as the DynamoDB table, EventBridge event bus, and the Athena table, e.g., "us-east-1".
         3. ResourceNamePrefix: Prefix for naming all of the resources created by this CloudFormation template, e.g., "service-catalog". You may leave the default value.
     3. Deployment targets can either be your entire AWS Organization or specific Organizational Units (OUs) that where AWS Service Catalog products will be provisioned.
-    4. Select all of the regions matching the hub account deployment from the previous step.
-7. To test create a product in a spoke account and verify that an item was inserted into the DynamoDB table found in the hub account's primary region.
+    4. Select all of the Regions matching the hub account deployment from the previous step.
+7. To test create a product in a spoke account and verify that an item was inserted into the DynamoDB table found in the hub account's primary Region.
 
 ### Athena DynamoDB Connector
 
@@ -141,11 +141,11 @@ QuickSight will let us to visulize the data stored in the DynamoDB via the Athen
 
 #### Create aws-quicksight-s3-consumers-role-v0 role
 
-In QuickSight, select the upper right drop-down menu, and select "Manage QuickSight". On the "Security & permissions" page under "QuickSight access to AWS services", select "Manage":
+In QuickSight, select the upper right drop-down menu, and select "Manage QuickSight". On the "Security and permissions" page under "QuickSight access to AWS services", select "Manage":
 
 ![quicksight_security](./images/quicksight_security.png)
 
-Deselect and select "Amazon Athena", then select “Next”. Once prompted, select "Lambda", and select the Dynamo DB connector Lambda.
+Deselect and select "Amazon Athena", then select “Next”. Once prompted, select "Lambda", and select the DynamoDB connector Lambda.
 
 ![quicksight_security](./images/quicksight_lambda.png)
 
@@ -161,7 +161,7 @@ Create a new data source pointing to the Athena workgroup:
 
 ![quicksight_datasource](./images/quicksight_datasource.png)
 
-Select the Dynamo DB table created by the audit_hub_stack.yaml CloudFormation StackSet:
+Select the DynamoDB table created by the audit_hub_stack.yaml CloudFormation StackSet:
 
 ![quicksight_db_table](./images/quicksight_db_table.png)
 
@@ -191,15 +191,15 @@ Finally, create visualizations using the data from the dataset.  Here are severa
     2. [Delete the analysis](https://docs.aws.amazon.com/quicksight/latest/user/deleting-an-analysis.html)
     3. [Delete the dataset](https://docs.aws.amazon.com/quicksight/latest/user/delete-a-data-set.html)
 
-## Conclusion
-
-In this post, we created a mechanism to aggregate AWS Service Catalog product activity within in an organization, and present the information with a QuickSight dashboard. This information can be used to understand AWS Service Catalog portfolio usage, the adoption of AWS services, and to make decisions on further development on AWS Service Catalog products.
-
 ## Troubleshooting
 
-EventBridge may fail to send events from the spoke accounts to the hub account's custom event bus due to networking or access issues. In this event, the spoke account's event bus will forward the event to the hub account's dead letter queue SQS. These events will eventually be processed, and the remaining SQS messages will be deleted.
+EventBridge may fail to send events from the spoke accounts to the hub account's custom event bus due to networking or access issues. In this event, the spoke account's event bus will forward the event to the hub account's dead letter queue SQS. These events will eventually be processed, and the remaining Amazon SQS messages will be deleted.
 
-Event processor Lambda may fail to process an event due to a change in the schema or some transient issue. In this event, check the event processor Lambda function's CloudWatch logs to determine the root cause.
+Event processor Lambda may fail to process an event due to a change in the schema or some transient issue. In this event, check the event processor Lambda function's CloudWatch Logs to determine the root cause.
+
+## Conclusion
+
+In this post, we created a mechanism to aggregate AWS Service Catalog product activity within in an organization, and present the information with a QuickSight dashboard. This information can be used to understand AWS Service Catalog portfolio usage, the adoption of AWS services, and to make decisions on further development of new AWS Service Catalog products to enable self-service across your organization.
 
 ## Security
 
