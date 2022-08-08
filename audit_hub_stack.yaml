@@ -27,12 +27,12 @@ Parameters:
 
 Conditions:
   # Create central resources only in PrimaryRegion
-  DeployPrimaryRegion: !Equals [ !Ref 'AWS::Region', !Ref PrimaryRegion ]
+  DeployPrimaryRegion: !Equals [!Ref "AWS::Region", !Ref PrimaryRegion]
 
 Resources:
-#########################################################
-# Copy Lambda Function Code
-#########################################################
+  #########################################################
+  # Copy Lambda Function Code
+  #########################################################
   CopyZipsBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -46,6 +46,8 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
   CopyZipsBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -53,15 +55,15 @@ Resources:
       Bucket: !Ref CopyZipsBucket
       PolicyDocument:
         Statement:
-          - Action: 's3:*'
+          - Action: "s3:*"
             Condition:
               Bool:
-                'aws:SecureTransport': 'false'
+                "aws:SecureTransport": "false"
             Effect: Deny
-            Principal: '*'
+            Principal: "*"
             Resource:
-              - !Sub 'arn:aws:s3:::${CopyZipsBucket}/*'
-              - !Sub 'arn:aws:s3:::${CopyZipsBucket}'
+              - !Sub "arn:aws:s3:::${CopyZipsBucket}/*"
+              - !Sub "arn:aws:s3:::${CopyZipsBucket}"
             Sid: AllowSSLRequestsOnly
 
   CopyZips:
@@ -78,7 +80,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
@@ -90,13 +92,13 @@ Resources:
       Policies:
         - PolicyName: lambda-copier
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
                   - s3:GetObject
                 Resource:
-                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+                  - !Sub "arn:aws:s3:::${S3BucketName}/*"
               - Effect: Allow
                 Action:
                   - s3:PutObject
@@ -107,8 +109,8 @@ Resources:
                   - s3:Get*
                   - s3:List*
                 Resource:
-                  - !Sub 'arn:aws:s3:::${CopyZipsBucket}/*'
-                  - !Sub 'arn:aws:s3:::${CopyZipsBucket}'
+                  - !Sub "arn:aws:s3:::${CopyZipsBucket}/*"
+                  - !Sub "arn:aws:s3:::${CopyZipsBucket}"
 
   CopyZipsFunction:
     Type: AWS::Lambda::Function
@@ -116,7 +118,7 @@ Resources:
       Description: Copies objects from a source S3 bucket to a destination
       Handler: index.handler
       Runtime: python3.7
-      Role: !GetAtt 'CopyZipsRole.Arn'
+      Role: !GetAtt "CopyZipsRole.Arn"
       Timeout: 240
       Code:
         ZipFile: |
@@ -169,23 +171,29 @@ Resources:
                   timer.cancel()
                   cfnresponse.send(event, context, status, {}, None)
 
-#########################################################
-# S3
-#########################################################
+  #########################################################
+  # S3
+  #########################################################
   AuditAthenaBucket:
     Type: AWS::S3::Bucket
     Condition: DeployPrimaryRegion
     Properties:
       BucketName: !Sub audit-athena-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
-#########################################################
-# DynamoDB
-#########################################################
+  #########################################################
+  # DynamoDB
+  #########################################################
   AuditTable:
     Type: AWS::DynamoDB::Table
     Condition: DeployPrimaryRegion
@@ -205,9 +213,9 @@ Resources:
         WriteCapacityUnits: 5
       TableName: !Sub "${ResourceNamePrefix}-db-table"
 
-#########################################################
-# SQS
-#########################################################
+  #########################################################
+  # SQS
+  #########################################################
   AuditDLQ:
     Type: AWS::SQS::Queue
     Properties:
@@ -241,9 +249,9 @@ Resources:
       EventSourceArn: !GetAtt AuditDLQ.Arn
       FunctionName: !GetAtt AuditLambdaFunction.Arn
 
-#########################################################
-# Lambda
-#########################################################
+  #########################################################
+  # Lambda
+  #########################################################
   AuditLambdaServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -269,7 +277,7 @@ Resources:
       Description: !Sub ${ResourceNamePrefix}-${AWS::Region} Lambda service role policy
       Path: /
       PolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Sid: AccessDynamoDB
             Effect: Allow
@@ -293,7 +301,7 @@ Resources:
             Resource:
               - !GetAtt AuditDLQ.Arn
       Roles:
-      - !Ref AuditLambdaServiceRole
+        - !Ref AuditLambdaServiceRole
 
   AuditLambdaFunction:
     Type: AWS::Lambda::Function
@@ -315,9 +323,9 @@ Resources:
           SQS_DLQ: !Sub https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourceNamePrefix}-dlq
           PRIMARY_REGION: !Ref PrimaryRegion
 
-#########################################################
-# EventBridge
-#########################################################
+  #########################################################
+  # EventBridge
+  #########################################################
   AuditEventBus:
     Type: AWS::Events::EventBus
     Condition: DeployPrimaryRegion
@@ -328,7 +336,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Condition: DeployPrimaryRegion
     Properties:
-      LogGroupName: !Sub '/aws/events/${ResourceNamePrefix}-bus-events'
+      LogGroupName: !Sub "/aws/events/${ResourceNamePrefix}-bus-events"
       RetentionInDays: 7
 
   AuditEventBusArchive:
@@ -362,22 +370,18 @@ Resources:
       EventBusName: !Ref AuditEventBus
       EventPattern:
         {
-          "source": [
-              "aws.servicecatalog"
-          ],
-          "detail-type": [
-              "AWS API Call via CloudTrail"
-          ],
-          "detail": {
-              "eventSource": [
-                  "servicecatalog.amazonaws.com"
-              ],
-              "eventName": [
+          "source": ["aws.servicecatalog"],
+          "detail-type": ["AWS API Call via CloudTrail"],
+          "detail":
+            {
+              "eventSource": ["servicecatalog.amazonaws.com"],
+              "eventName":
+                [
                   "ProvisionProduct",
                   "TerminateProvisionedProduct",
-                  "UpdateProvisionedProduct"
-              ]
-          }
+                  "UpdateProvisionedProduct",
+                ],
+            },
         }
       State: "ENABLED"
       Targets:

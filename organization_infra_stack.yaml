@@ -1,5 +1,5 @@
 ---
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Description: Creating the required hub infra
 
 Parameters:
@@ -14,18 +14,24 @@ Parameters:
     Default: "service-catalog"
 
 Resources:
-#########################################################
-# S3 Source Template Bucket
-#########################################################
+  #########################################################
+  # S3 Source Template Bucket
+  #########################################################
   TemplateBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub source-files-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
   TemplateBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -33,15 +39,15 @@ Resources:
       Bucket: !Ref TemplateBucket
       PolicyDocument:
         Statement:
-          - Action: 's3:*'
+          - Action: "s3:*"
             Condition:
               Bool:
-                'aws:SecureTransport': 'false'
+                "aws:SecureTransport": "false"
             Effect: Deny
-            Principal: '*'
+            Principal: "*"
             Resource:
-              - !Sub 'arn:aws:s3:::${TemplateBucket}/*'
-              - !Sub 'arn:aws:s3:::${TemplateBucket}'
+              - !Sub "arn:aws:s3:::${TemplateBucket}/*"
+              - !Sub "arn:aws:s3:::${TemplateBucket}"
             Sid: AllowSSLRequestsOnly
           - Action:
               - s3:GetObject
@@ -49,19 +55,19 @@ Resources:
               - s3:ListBucket
             Condition:
               StringEquals:
-                'aws:PrincipalOrgID': !Ref OrganizationId
+                "aws:PrincipalOrgID": !Ref OrganizationId
             Effect: Allow
-            Principal: '*'
+            Principal: "*"
             Resource:
-              - !Sub 'arn:aws:s3:::${TemplateBucket}/*'
-              - !Sub 'arn:aws:s3:::${TemplateBucket}'
+              - !Sub "arn:aws:s3:::${TemplateBucket}/*"
+              - !Sub "arn:aws:s3:::${TemplateBucket}"
             Sid: AllowOrg
 
-#########################################################
-# IAM
-#########################################################
+  #########################################################
+  # IAM
+  #########################################################
   SCStackSetParentRole:
-    Type: 'AWS::IAM::Role'
+    Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -71,7 +77,7 @@ Resources:
               Service:
                 - cloudformation.amazonaws.com
             Action:
-              - 'sts:AssumeRole'
+              - "sts:AssumeRole"
       RoleName: sc-stackset-parent-role
       Path: /
       Policies:
@@ -80,11 +86,11 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: 'sts:AssumeRole'
-                Resource: 'arn:aws:iam::*:role/sc-stackset-child-role'
+                Action: "sts:AssumeRole"
+                Resource: "arn:aws:iam::*:role/sc-stackset-child-role"
 
   SCStackSetChildRole:
-    Type: 'AWS::IAM::Role'
+    Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -94,7 +100,7 @@ Resources:
               AWS:
                 - !GetAtt SCStackSetParentRole.Arn
             Action:
-              - 'sts:AssumeRole'
+              - "sts:AssumeRole"
       RoleName: sc-stackset-child-role
       Path: /
       Policies:
@@ -109,7 +115,7 @@ Resources:
                   - s3:*
                   - sns:*
                   - iam:PassRole
-                Resource: '*'
+                Resource: "*"
         - PolicyName: sc-stackset-audit-policy
           PolicyDocument:
             Version: "2012-10-17"
